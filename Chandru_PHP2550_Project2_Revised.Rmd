@@ -1,0 +1,550 @@
+---
+title: "PHP 2550 Project 2"
+author: "Himashree Chandru"
+date: "2023-11-14"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+  word_document: default
+geometry: margin=0.5in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Downloads")
+
+#packages
+install.packages("Hmisc", repos = "http://cran.us.r-project.org")
+install.packages("performance", repos = "http://cran.us.r-project.org")
+install.packages("webshot2", repos = "http://cran.us.r-project.org")
+install.packages("rcompanion", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(naniar)
+library(mice)
+library(gtsummary)
+library(gt)
+library(webshot2)
+library(vcd)
+library(corrplot)
+library(readr)
+library(labelled)
+library(Hmisc)
+library(glmnet)
+library(pROC)
+library(lme4)
+library(knitr)
+library(kableExtra)
+```
+
+```{r,include = FALSE}
+#laoding the data
+df <- read_csv("project2.csv")
+```
+
+# Abstract
+
+This study, conducted in collaboration with the BPD Collaborative Registry, aimed to develop a predictive model for tracheostomy placement in infants with severe bronchopulmonary dysplasia (sBPD). Analyzing data from diverse neonatal care centers, the study incorporated demographic, birth, and respiratory variables to capture the complexity of decision-making in neonatal care.
+
+Preprocessing efforts addressed data inconsistencies, and multiple imputation techniques handled missing data, resulting in a robust dataset. Lasso models, chosen for their ability to handle complex relationships and promote variable selection, were employed to develop predictive models at 36 and 44 weeks postmenstrual age. Some of the key variables in these models were administration of prenatal steroids, ventilation support through invasive positive pressure, ventilation support through non-invasive positive pressure, and administration of medication for pulmonary hypertension.
+
+The evaluation of these models revealed consistent superiority in performance for the 36 Week Model. Metrics such as accuracy, recall, specificity, and the Brier Score consistently favored the 36 Week Model, signifying its heightened ability to predict tracheostomy placement accurately. 
+
+In conclusion, this study provides valuable insights into the predictive modeling of tracheostomy placement, offering a nuanced understanding of factors influencing clinical decisions in neonatal care. The results hold potential for enhancing patient outcomes and informing counseling practices in the challenging realm of sBPD management.
+
+# Introduction
+This project, undertaken in partnership with Dr. Chris Schmid from the Biostatistics Department, addresses the ongoing challenges surrounding severe bronchopulmonary dysplasia (sBPD) in neonatal care. The uncertainty surrounding precise indication criteria and optimal timing for tracheostomy placement in neonates with sBPD motivates this research initiative. Existing studies suggest potential benefits associated with earlier tracheostomy placement, particularly concerning neonatal growth (Schmid). Notably, previous analyses of extensive databases have successfully predicted the likelihood of tracheostomy placement or death based on baseline demographics and clinical diagnoses. However, these analyses lacked the inclusion of detailed respiratory parameters and did not offer predictions at various postmenstrual ages (PMA). This project aims to fill this gap by incorporating a comprehensive set of respiratory variables measured at critical time points, specifically at 36 and 44 weeks PMA. 
+
+# Data Overview
+The dataset originates from the BPD Collaborative Registry, a multi-center consortium of interdisciplinary BPD programs across the United States and Sweden. It includes infants with gestational age below 32 weeks and diagnosed with sBPD according to the 2001 NHLBI criteria. Standard demographic and clinical data are collected at four critical time points: birth, 36 weeks postmenstrual age (PMA), 44 weeks PMA, and discharge. The dataset, covering the period between January 1 and July 19, 2021, was queried for patients with sBPD and complete growth data. Ten BPD Collaborative centers contributed data meeting the study's inclusion criteria.
+
+The data analyzed here contained different types of variables, and consisted of 996 observations of 30 variables. Patient ID and center number were included. The demographic variables included were maternal race and ethnicity (1 = Hispanic/Latino, 2 = Not Hispanic or Latino). The birth variables included were birth weight, obstetrical gestational age, whether the infant was small for gestational age, birth length, birth head circumference, delivery method (1 = Vaginal Delivery, 2 = Cesarean Section), whether prenatal corticosteroids were administered, whether complete prenatal steroids were administered, whether maternal chorioamnionitis was present, gender, and whether the infant received any surfactant at any point in the first 72 hours. The weight of the infant, and respiratory support variables such as ventilation support (0 = No respiratory support or supplemental oxygen, 1 = Non-invasive positive pressure, 2 = Invasive positive pressure), fraction of inspired oxygen, peak inspiratory pressure, positive end exploratory pressure, and whether medication for pulmonary hypertension was administered, were recorded at both 36 and 44 weeks. In addition, data on the infant’s gestational age at the time of discharge and whether tracheostomy (0 = No, 1 = Yes) or death had occurred at this point were recorded.
+
+# Exploratory analysis
+
+## Preprocessing
+
+Due to coding inconsistencies in the maternal race variable, it was excluded from the analysis. The levels of the variable corresponding to whether the infant was small for gestational age were recoded to Yes/No from SGA/Not SGA. In addition, the observation corresponding to Patient ID 2000824 was duplicated 3 times, so these duplicates were removed. Any missing values for the center variable were filled in using the Patient ID number for that observation. The categorical variables were converted to factors to help with ease of analysis. Variable labels for all variables were also created.
+
+```{r, include=FALSE}
+#changing the values of the sga variable and removing the mat_race variable
+df <- df %>%
+  mutate(sga = case_when(sga == "Not SGA" ~ "No",
+         sga == "SGA" ~ "Yes")) %>%
+  select(-mat_race)
+
+length(unique(df$record_id)) #only 996 unique ids but we have 999 observations
+df <- df[!duplicated(df$record_id),] #removing the duplicates
+
+#getting the center number from the record id
+df$center <- ifelse(nchar(as.character(df$record_id)) == 7, as.numeric(substr(df$record_id, 1, 1)), as.numeric(substr(df$record_id, 1, 2)))
+
+#Change variables to factors
+df$center <- as.factor(df$center)
+df$mat_ethn <- as.factor(df$mat_ethn)
+df$del_method <- as.factor(df$del_method)
+df$prenat_ster <- as.factor(df$prenat_ster)
+df$com_prenat_ster <- as.factor(df$com_prenat_ster)
+df$mat_chorio <- as.factor(df$mat_chorio)
+df$gender <- as.factor(df$gender)
+df$sga <- as.factor(df$sga)
+df$any_surf <- as.factor(df$any_surf)
+df$ventilation_support_level.36 <- as.factor(df$ventilation_support_level.36)
+df$med_ph.36 <- as.factor(df$med_ph.36)
+df$ventilation_support_level_modified.44 <- as.factor(df$ventilation_support_level_modified.44)
+df$med_ph.44 <- as.factor(df$med_ph.44)
+df$Trach <- as.factor(df$Trach)
+df$Death <- as.factor(df$Death)
+
+#create variable labels
+var_label(df) <- list(
+  record_id = "Patient ID",
+  center = "Medical Center",
+  mat_ethn = "Maternal Ethnicity",
+  bw = "Birth Weight (g)",
+  ga = "Obstetrical Gestational Age",
+  blength = "Birth Length (cm)",
+  birth_hc = "Birth Head Circumference (cm)",
+  del_method = "Delivery Method",
+  prenat_ster = "Prenatal Corticosteroids",
+  com_prenat_ster = "Complete Prenatal Steroids",
+  mat_chorio = "Maternal Chorioamnionitis",
+  gender = "Gender",
+  sga = "Small for Gestational Age",
+  any_surf = "Received Surfactant in the First 72 Hours",
+  weight_today.36 = "Weight at 36 Weeks",
+  ventilation_support_level.36 = "Ventilation Support Level at 36 Weeks",
+  inspired_oxygen.36 = "Fraction of Inspired Oxygen at 36 Weeks",
+  p_delta.36 = "Peak Inspiratory Pressure (cm H2O) at 36 Weeks",
+  peep_cm_h2o_modified.36 = "Positive End Exploratory Pressure (cm H2O) at 36 Weeks",
+  med_ph.36 = "Medication for Pulmonary Hypertension at 36 Weeks",
+  weight_today.44 = "Weight at 44 Weeks",
+  ventilation_support_level_modified.44 = "Ventilation Support Level at 44 Weeks",
+  inspired_oxygen.44 = "Fraction of Inspired Oxygen at 44 Weeks",
+  p_delta.44 = "Peak Inspiratory Pressure (cm H2O) at 44 Weeks",
+  peep_cm_h2o_modified.44 = "Positive End Exploratory Pressure (cm H2O) at 44 Weeks",
+  med_ph.44 = "Medication for Pulmonary Hypertension at 44 Weeks",
+  hosp_dc_ga = "Hospital Discharge Gestational Age",
+  Trach = "Tracheostomy",
+  Death = "Death"
+)
+```
+
+## Missing Data
+
+```{r, echo = FALSE}
+#missing data summary
+df_miss <- df
+colnames(df_miss) <- label(df)
+
+gg_miss_var(df_miss, show_pct = TRUE) +
+  theme(axis.text.y = element_text(size = 5)) +
+  ggtitle("Figure 1. Percent Missing Observations by Variable") +
+  theme(plot.title = element_text(size = 10))
+```
+
+From exploring the missing data (Figure 1), it can be seen that all of the 44 week variables have about 40-45% of their values missing. This may be due to a combination of reasons - different centers might collect different data, and the missingness might also be coming from the infants that were discharged before 44 weeks. Other variables with large percentages of missingness are the variable recording whether the infant received surfactant at any point in the first 72 hours (~45% missing), and the variable recording whether complete prenatal steroids were administered (~20%).
+
+## Descriptive Statistics
+
+Overall descriptive statistics (Table 1) and descriptive statistics by center (Table 2) were computed. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, out.width="70%"}
+theme_gtsummary_compact(set_theme=TRUE, font_size = 10)
+
+#table of descriptive statistics - overall
+df_miss <- df_miss[,-1]
+
+overall_desc_stats <- df_miss %>%
+  tbl_summary(missing = "no") %>%
+  as_gt() %>%
+  gt::tab_header(title = "Table 1. Overall Descriptive Statistics") %>%
+  gtsave(filename = "proj2_table1.png")
+
+knitr::include_graphics('proj2_table1.png')
+```
+
+```{r, echo = FALSE, out.width="70%"}
+#table of descriptive statistics by center
+desc_stats_center <- df_miss %>%
+  tbl_summary(by = "Medical Center", missing_text = "Missing") %>%
+  as_gt() %>%
+  gt::tab_header(title = "Table 2. Descriptive Statistics by Center") %>%
+  gtsave(filename = "proj2_table2.png")
+
+knitr::include_graphics('proj2_table2.png')
+
+```
+
+
+## Correlations and Associations
+
+Correlations for all the continuous variables were also computed (Figure 2). Birth weight and birth length, birth weight and birth head circumference, gestational age and birth head circumference, weight at 36 weeks and weight at 44 weeks, seem to be most strongly positively correlated (correlation coefficient >= 0.7). 
+
+```{r, echo = FALSE}
+#Correlation matrix for the continuous variables
+numeric_df <- df %>%
+  select(c("bw", "ga", "blength", "birth_hc", "weight_today.36",
+                                "inspired_oxygen.36", "p_delta.36", "peep_cm_h2o_modified.36",
+                                "weight_today.44", "inspired_oxygen.44", "p_delta.44", "peep_cm_h2o_modified.44", "hosp_dc_ga"))
+
+correlation_matrix <- cor(numeric_df[complete.cases(numeric_df),])
+corrplot(correlation_matrix, method = "number", number.cex = 0.5, title = "Figure 2. Correlations Between Continuous Variables", tl.cex = 0.5, mar=c(0,0,2,0))
+```
+
+# Methods
+
+## Multiple Imputation for Missing Data
+
+The data was split into test (30%) and train data (70%). The variables with high percent of missingness (>10% missing) that might make imputation hard were: peak inspiratory pressure at 44 weeks, fraction of inspired oxygen at 44 weeks, weight at 44 weeks, positive end exploratory pressure at 44 weeks, whether the infant received surfactant at any point in the first 72 hours, ventilation support level at 44 weeks, whether medication for pulmonary hypertension was administered at 44 weeks, whether complete prenatal steroids were administered, peak inspiratory pressure at 36 weeks, hospital discharge gestational age, and positive end exploratory pressure at 36 weeks. Among these,  the continuous variables are correlated either slightly or moderately with other continuous variables that have a low percent of missingness (<10%) as can be seen in Figure 2. Hence these variables were imputed. Hospital discharge gestational age was not imputed and it was removed from our analysis as this data would not be available in a predictive modeling setting.
+
+```{r, include = FALSE}
+#ventilation support level at 44 weeks vs 36 weeks
+assocstats(table(df$ventilation_support_level_modified.44, df$ventilation_support_level.36))$chisq_tests[2,3]
+
+#medication for pulmonary hypertension at 44 weeks vs 36 weeks
+assocstats(table(df$med_ph.44, df$med_ph.36))$chisq_tests[2,3]
+
+#complete prenatal steroids vs prenatal steroids
+assocstats(table(df$com_prenat_ster, df$prenat_ster))$chisq_tests[2,3]
+```
+
+As for the categorical variables, the ventilation support level variables and the pulmonary hypertension medication variables at 36 and 44 weeks were found to be associated (p-values of Chi-squared tests < 0.05). Similarly, the prenatal corticosteroids and complete prenatal corticosteroids variables were also found to be associated. However, the variable corresponding to whether the infant received any surfactant in the first 72 hours does not have an analogous variable at a different time point which could potentially be used in multiple imputation. As a result, this variable was removed from the analysis. 
+
+Finally, upon removing the variables corresponding to death (tracheostomy is the outcome), patient ID (not relevant for imputation), and medical center (not relevant for imputation), multiple imputation was implemented to impute missing data, resulting in 10 imputed data sets (5 imputed data sets for the train data and 5 imputed data sets for the test data). Both 36 week and 44 week data are imputed.
+
+```{r, include=FALSE}
+set.seed(155)
+#to create test and train data sets
+ignore <- sample(c(TRUE, FALSE), 996, replace = TRUE, prob = c(0.3,0.7))
+
+#data using tracheostomy as the outcome (removing death), and removing any_surf since it has a lot of missing data and cannot be imputed with information from any other variables
+df <- df %>%
+  select(-c(Death, any_surf, record_id))
+
+#train and test data sets
+train_df <- df[!ignore, ]
+test_df <- df[ignore, ]
+
+#imputing 5 test and train datasets
+imp.train <- mice(train_df[,-c(1,25)], m = 5, print = FALSE, seed = 155)
+imp.test <- mice.mids(imp.train, newdata = test_df[,-c(1,25)])
+
+df_train_imp_36 <- vector("list", length = 5)
+df_test_imp_36 <- vector("list", length = 5)
+df_train_imp_44 <- vector("list", length = 5)
+df_test_imp_44 <- vector("list", length = 5)
+
+for(i in 1:5){
+  df_train_imp_36[[i]] <- mice::complete(imp.train, i) %>%
+    select(-c(weight_today.44, ventilation_support_level_modified.44, inspired_oxygen.44, p_delta.44, peep_cm_h2o_modified.44, med_ph.44))
+  df_train_imp_36[[i]]$center <- train_df$center
+  df_train_imp_36[[i]]$hosp_dc_ga <- train_df$hosp_dc_ga
+  
+  df_test_imp_36[[i]] <- mice::complete(imp.test, i) %>%
+    select(-c(weight_today.44, ventilation_support_level_modified.44, inspired_oxygen.44, p_delta.44, peep_cm_h2o_modified.44, med_ph.44))
+  df_test_imp_36[[i]]$center <- test_df$center
+  df_test_imp_36[[i]]$hosp_dc_ga <- test_df$hosp_dc_ga
+  
+  df_train_imp_44[[i]] <- mice::complete(imp.train, i) %>%
+    select(-c(weight_today.36, ventilation_support_level.36, inspired_oxygen.36, p_delta.36, peep_cm_h2o_modified.36, med_ph.36))
+  df_train_imp_44[[i]]$center <- train_df$center
+  df_train_imp_44[[i]]$hosp_dc_ga <- train_df$hosp_dc_ga
+
+  df_test_imp_44[[i]] <- mice::complete(imp.test, i) %>%
+    select(-c(weight_today.36, ventilation_support_level.36, inspired_oxygen.36, p_delta.36, peep_cm_h2o_modified.36, med_ph.36))
+  df_test_imp_44[[i]]$center <- test_df$center
+  df_test_imp_44[[i]]$hosp_dc_ga <- test_df$hosp_dc_ga
+
+}
+
+#storing all the imputed data 
+#only those discharged after 36 weeks
+df_train_imp_36_long <- mice::complete(imp.train, action = "long") %>%
+  select(-c(weight_today.44, ventilation_support_level_modified.44, inspired_oxygen.44, p_delta.44, peep_cm_h2o_modified.44, med_ph.44))
+  df_train_imp_36_long$center <- rep(train_df$center, 5)
+  df_train_imp_36_long$hosp_dc_ga <- rep(train_df$hosp_dc_ga, 5)
+df_train_imp_36_long <- df_train_imp_36_long %>%
+  filter(hosp_dc_ga > 36)
+
+#only those discharged after 36 weeks
+df_test_imp_36_long <- mice::complete(imp.test, action = "long") %>%
+  select(-c(weight_today.44, ventilation_support_level_modified.44, inspired_oxygen.44, p_delta.44, peep_cm_h2o_modified.44, med_ph.44))
+  df_test_imp_36_long$center <- rep(test_df$center, 5)
+  df_test_imp_36_long$hosp_dc_ga <- rep(test_df$hosp_dc_ga, 5)
+df_test_imp_36_long <- df_test_imp_36_long %>%
+  filter(hosp_dc_ga > 36)
+
+#only those discharged after 44 weeks
+df_train_imp_44_long <- mice::complete(imp.train, action = "long") %>%
+  select(-c(weight_today.36, ventilation_support_level.36, inspired_oxygen.36, p_delta.36, peep_cm_h2o_modified.36, med_ph.36))
+  df_train_imp_44_long$center <- rep(train_df$center, 5)
+  df_train_imp_44_long$hosp_dc_ga <- rep(train_df$hosp_dc_ga, 5)
+df_train_imp_44_long <- df_train_imp_44_long %>%
+  filter(hosp_dc_ga > 44)
+
+#only those discharged after 44 weeks
+df_test_imp_44_long <- mice::complete(imp.test, action = "long") %>%
+  select(-c(weight_today.36, ventilation_support_level.36, inspired_oxygen.36, p_delta.36, peep_cm_h2o_modified.36, med_ph.36))
+  df_test_imp_44_long$center <- rep(test_df$center, 5)
+  df_test_imp_44_long$hosp_dc_ga <- rep(test_df$hosp_dc_ga, 5)
+df_test_imp_44_long <- df_test_imp_44_long %>%
+  filter(hosp_dc_ga > 44)
+```
+
+## Model Building - Lasso model
+
+In the development of predictive models for tracheostomy, two lasso models were created, encompassing all 21 predictors except the center variable. The exclusion of center aimed to enhance model generalizability, a critical consideration given the limited data from specific centers within the collaborative NICU network. These models were built using data gathered at 36 weeks PMA and 44 weeks PMA. No interactions were considered to aid in ease of interpretation.
+
+The decision to employ lasso models was rooted in their distinctive attributes. The lasso's capacity to shrink coefficients to zero provides effective variable selection, streamlining the identification of influential predictors. Moreover, its ability to adeptly handle multicollinearity contributes to the development of models that are not only accurate but also simpler and more interpretable.
+
+This emphasis on variable selection and multicollinearity management aligns with the overarching goal of not just predicting tracheostomy accurately but also ensuring the models are intelligible and clinically meaningful. The lasso model's tendency to shrink certain coefficients to zero inherently fosters model simplicity, facilitating the interpretation of key predictors and their impacts on the outcome. These characteristics collectively enhance the robustness, clarity, and practical relevance of the predictive models in the context of neonatal care.
+
+Cross-validation was employed to determine the optimal value for lambda, the parameter regulating the extent of shrinkage in lasso regression. The goal was to identify the lambda value that minimized cross-validation error. Lasso models were individually fitted to each of the five imputed datasets for both the 36 and 44-week time points. The resulting coefficients from these models were then averaged to derive the final models. 
+
+```{r,include=FALSE}
+lasso <- function(df) { 
+  #' Runs 10-fold CV for lasso and returns corresponding coefficients 
+  #' @param df, data set
+  #' @return coef, coefficients for minimum cv error
+  
+  # Matrix form for ordered variables 
+  x.ord <- model.matrix(Trach~., data = df[,-c(19,20)])[,-1] 
+  y.ord <- df$Trach 
+  
+  # Generate folds
+  k <- 10 
+  set.seed(1) # consistent seeds between imputed data sets
+  folds <- sample(1:k, nrow(df), replace=TRUE)
+  
+  # Lasso model
+  lasso_mod_cv <- cv.glmnet(x.ord, y.ord, nfolds = 10, foldid = folds, 
+                         alpha = 1, family = "binomial") 
+  lasso_mod <- glmnet(x.ord, y.ord, nfolds = 10, alpha = 1, family = "binomial",
+                      lambda = lasso_mod_cv$lambda.min)
+  
+  # Get coefficients 
+  coef <- coef(lasso_mod) 
+  return(coef) 
+} 
+
+# Find average lasso coefficients over imputed datasets - 36 week data
+lasso_coef1_36 <- lasso(df_train_imp_36[[1]]) 
+lasso_coef2_36 <- lasso(df_train_imp_36[[2]]) 
+lasso_coef3_36 <- lasso(df_train_imp_36[[3]]) 
+lasso_coef4_36 <- lasso(df_train_imp_36[[4]]) 
+lasso_coef5_36 <- lasso(df_train_imp_36[[5]]) 
+lasso_coef_36 <- cbind(lasso_coef1_36, lasso_coef2_36, lasso_coef3_36, 
+                    lasso_coef4_36, lasso_coef5_36) 
+avg_coefs_lasso_36 <- apply(lasso_coef_36, 1, mean) 
+
+# Find average lasso coefficients over imputed datasets - 44 week data
+lasso_coef1_44 <- lasso(df_train_imp_44[[1]]) 
+lasso_coef2_44 <- lasso(df_train_imp_44[[2]]) 
+lasso_coef3_44 <- lasso(df_train_imp_44[[3]]) 
+lasso_coef4_44 <- lasso(df_train_imp_44[[4]]) 
+lasso_coef5_44 <- lasso(df_train_imp_44[[5]]) 
+lasso_coef_44 <- cbind(lasso_coef1_44, lasso_coef2_44, lasso_coef3_44, 
+                    lasso_coef4_44, lasso_coef5_44) 
+avg_coefs_lasso_44 <- apply(lasso_coef_44, 1, mean) 
+```
+
+**The 36 week model is given by:**
+
+$log(Odds of Tracheostomy) = −5.3486 + 0.0416X_1 − 0.0002X_2 + 0.0686X_3$
+$-0.0053X_4 + 0.0915X_5 + 0.5659X_6 - 0.0021X_7 - 0.0729X_8 - 0.0102X_9 -$ 
+$0.0005X_{10} + 1.9686X_{11} + 3.3715X_{12} - 0.0141X_{13} + 0.0081X_{14} + 0.0030X_{15}$
+
+where $X_1$ = mother is not Hispanic/Latino, $X_2$ = birth weight in grams, $X_3$ = birth length in cm, $X_4$ = birth head circumference, $X_5$ = Cesarean section delivery, $X_6$ = prenatal steroids were administered, $X_7$ = complete prenatal steroids were administered, $X_8$ = maternal chorioamnionitis was present, $X_9$ = infant was male, $X_{10}$ = infant weight at 36 weeks, $X_{11}$ = ventilation support through invasive positive pressure at 36 weeks, $X_{12}$ = fraction of inspired oxygen at 36 weeks, $X_{13}$ = peak inspiratory pressure (cm $H_2O$) at 36 weeks, $X_{14}$ = positive end exploratory pressure (cm $H_2O$) at 36 weeks, $X_{15}$ = medication for pulmonary hypertension was administered at 36 weeks
+
+**OR Table**
+
+```{r, echo=FALSE}
+wk36_vars <- names(avg_coefs_lasso_36[avg_coefs_lasso_36!=0])[-1]
+wk36_or <- data.frame(Variable = c("Mother is not Hispanic/Latino", "Birth weight in grams", "Birth length in cm", "Birth head circumference", "Cesarean section delivery", "Prenatal steroids were administered", "Complete prenatal steroids were administered", "Maternal chorioamnionitis was present", "Infant was male", "Infant weight at 36 weeks", "Ventilation support through invasive positive pressure at 36 weeks", "Fraction of inspired oxygen at 36 weeks", "Peak inspiratory pressure at 36 weeks", "Positive end exploratory pressure at 36 weeks", "Medication for pulmonary hypertension was administered at 36 weeks"), OR = exp(as.numeric(avg_coefs_lasso_36[avg_coefs_lasso_36!=0]))[-1]) %>%
+  kbl(caption = "Odds Ratios from the 36-Week Model", booktabs = T) 
+wk36_or
+```
+
+**Interpretations for Significant Variables**
+
+- The odds of getting a tracheostomy for infants whose mothers received prenatal steroids was 76.1% higher than that for infants whose mothers did not receive them, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants who received ventilation support through invasive positive pressure at 36 weeks was 616.08% higher than that for infants who received no respiratory support or supplemental oxygen, provided all other variables are held constant.
+- The odds of getting a tracheostomy increases by 2912.31% for every unit increase in fraction of inspired oxygen at 36 weeks, provided all other variables are held constant.
+
+**The 44 week model is given by:**
+
+$log(Odds of Tracheostomy) = − 3.2357 + 0.0623X_1 − 0.0013X_2 − 0.1273X_3 +$ 
+$0.1666X_4 + 0.0523X_5 + 0.2939X_6 + 0.7999X_7 + 0.3220X_8 - 0.1347X_9 +$
+$0.2174X_{10} - 0.4511X_{11} - 0.0011X_{12} - 1.4592X_{13} + 0.4147X_{14} -$
+$0.0007X_{15} + 0.0108X_{16} + 0.2990X_{17} + 0.4111X_{18}$
+
+where $X_1$ = mother is not Hispanic/Latino, $X_2$ = birth weight in grams, $X_3$ = obstetrical gestational age, $X_4$ = birth length in cm, $X_5$ = birth head circumference, $X_6$ = Cesarean section delivery, $X_7$ = prenatal steroids were administered, $X_8$ = complete prenatal steroids were administered, $X_9$ = maternal chorioamnionitis was present, $X_{10}$ = infant was male, $X_{11}$ = infant was small for gestational age, $X_{12}$ = infant weight at 44 weeks, $X_{13}$ = ventilation support through non-invasive positive pressure at 44 weeks, $X_{14}$ = ventilation support through invasive positive pressure at 44 weeks, $X_{15}$ = fraction of inspired oxygen at 44 weeks, $X_{16}$ = peak inspiratory pressure (cm $H_2O$) at 44 weeks, $X_{17}$ = positive end exploratory pressure (cm $H_2O$) at 44 weeks, $X_{18}$ = medication for pulmonary hypertension was administered at 44 weeks
+
+**OR Table**
+
+```{r, echo=FALSE}
+wk44_vars <- names(avg_coefs_lasso_44[avg_coefs_lasso_44!=0])[-1]
+wk44_or <- data.frame(Variable = c("Mother is not Hispanic/Latino", "Birth weight in grams", "Obstetrical gestational age", "Birth length in cm", "Birth head circumference", "Cesarean section delivery", "Prenatal steroids were administered", "Complete prenatal steroids were administered", "Maternal chorioamnionitis was present", "Infant was male", "Infant was small for gestational age", "Infant weight at 44 weeks", "Ventilation support through non-invasive positive pressure at 44 weeks", "Ventilation support through invasive positive pressure at 44 weeks", "Fraction of inspired oxygen at 44 weeks", "Peak inspiratory pressure at 44 weeks", "Positive end exploratory pressure at 44 weeks", "Medication for pulmonary hypertension was administered at 44 weeks"), OR = exp(as.numeric(avg_coefs_lasso_44[avg_coefs_lasso_44!=0]))[-1]) %>%
+  kbl(caption = "Odds Ratios from the 44-Week Model", booktabs =T)
+wk44_or
+```
+
+
+**Interpretations for Significant Variables**
+
+- The odds of getting a tracheostomy decreases by 11.95% for every 1 week increase in obstetrical gestational age provided all other variables are held constant.
+- The odds of getting a tracheostomy increases by 18.13% for every 1 cm increase in birth length, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants born through Cesarean section is 34.16% higher than that for infants born through vaginal delivery, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants whose mothers received prenatal steroids was 122.54% higher than that for infants whose mothers did not receive them, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants whose mothers received complete prenatal steroids was 37.98% higher than that for infants whose mothers did not receive them, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants whose mothers had chorioamnionitis was 14.42% higher than that for infants whose mothers did not have it, provided all other variables are held constant.
+- The odds of getting a tracheostomy for male infants was 24.29% higher than that for female infants, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants who were small for gestational age was 36.31% lower than that for infants who were not small for gestational age, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants who received ventilation support through non-invasive positive pressure at 44 weeks was 76.76% lower than that for infants who received no respiratory support or supplemental oxygen, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants who received ventilation support through invasive positive pressure at 44 weeks was 51.39% higher than that for infants who received no respiratory support or supplemental oxygen, provided all other variables are held constant.
+- The odds of getting a tracheostomy increases by 34.85% for every 1 cm increase in positive end exploratory pressure at 44 weeks, provided all other variables are held constant.
+- The odds of getting a tracheostomy for infants who received medication for pulmonary hypertension at 44 weeks was 50.84% higher than that for infants who did not, provided all other variables are held constant.
+
+## Model Evaluation
+
+A threshold of 0.1 for the 36-week model and 0.103 were used to obtain the predicted classes as these were found to be optimal to balance sensitivity and specificity.
+
+```{r, include = FALSE}
+# Find predicted probabilities and predicted classes on long imputed test data 
+
+#36 week model
+x_vars_36 <- model.matrix(Trach~. , df_test_imp_36_long[,-c(1,2,21,22)])
+df_test_imp_36_long$pred_probs <- as.vector(plogis(x_vars_36 %*% avg_coefs_lasso_36)) #predicted probabilities
+df_test_imp_36_long$pred <- ifelse(df_test_imp_36_long$pred_probs > 0.1, 1, 0) #predicted classes
+
+#44 week model
+x_vars_44 <- model.matrix(Trach~. , df_test_imp_44_long[,-c(1,2,21,22)])
+df_test_imp_44_long$pred_probs <- as.vector(plogis(x_vars_44 %*% avg_coefs_lasso_44)) #predicted probabilities
+df_test_imp_44_long$pred <- ifelse(df_test_imp_44_long$pred_probs > 0.103, 1, 0) #predicted classes
+```
+
+### Performance Measures for the Two Models
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+#36 week model
+
+#confusion matrix
+confusion_matrix_36 <- table(Observed = df_test_imp_36_long$Trach, Predicted = df_test_imp_36_long$pred)
+
+#accuracy
+accuracy_36 <- sum(diag(confusion_matrix_36)) / sum(confusion_matrix_36)
+
+#precision (positive predictive value)
+precision_36 <- confusion_matrix_36[2, 2] / sum(confusion_matrix_36[, 2])
+
+#recall (sensitivity / true positive rate)
+recall_36 <- confusion_matrix_36[2, 2] / sum(confusion_matrix_36[2, ])
+
+#specificity (true negative rate)
+specificity_36 <- confusion_matrix_36[1, 1] / sum(confusion_matrix_36[1, ])
+
+#f score
+f_score_36 <- 2 * (precision_36 * recall_36) / (precision_36 + recall_36)
+
+#roc and auc
+roc_obj_36 <- roc(df_test_imp_36_long$Trach, df_test_imp_36_long$pred_probs, auc=TRUE)
+# plot(roc_obj_36, print.thres = TRUE)
+auc_roc_36 <- auc(roc_obj_36)
+
+#brier score
+brier_score_36 <- mean((df_test_imp_36_long$pred_probs - (as.numeric(df_test_imp_36_long$Trach)-1))^2)
+
+#44 week model
+
+#confusion matrix
+confusion_matrix_44 <- table(Observed = df_test_imp_44_long$Trach, Predicted = df_test_imp_44_long$pred)
+
+#accuracy
+accuracy_44 <- sum(diag(confusion_matrix_44)) / sum(confusion_matrix_44)
+
+#precision (positive predictive value)
+precision_44 <- confusion_matrix_44[2, 2] / sum(confusion_matrix_44[, 2])
+
+#recall (sensitivity / true positive rate)
+recall_44 <- confusion_matrix_44[2, 2] / sum(confusion_matrix_44[2, ])
+
+#specificity (true negative rate)
+specificity_44 <- confusion_matrix_44[1, 1] / sum(confusion_matrix_44[1, ])
+
+#f score
+f_score_44 <- 2 * (precision_44 * recall_44) / (precision_44 + recall_44)
+
+#roc and auc
+roc_obj_44 <- roc(df_test_imp_44_long$Trach, df_test_imp_44_long$pred_probs)
+# plot(roc_obj_44, print.thres = TRUE)
+auc_roc_44 <- auc(roc_obj_44)
+
+#brier score
+brier_score_44 <- mean((df_test_imp_44_long$pred_probs - (as.numeric(df_test_imp_44_long$Trach)-1))^2)
+
+perf_tab <- data.frame(
+  Measure = c("Accuracy", "Precision", "Recall", "Specificity", "F Score", "AUC", "Brier Score"),
+  Week36_Model = c(
+    sprintf("%.4f", accuracy_36),
+    sprintf("%.4f", precision_36),
+    sprintf("%.4f", recall_36),
+    sprintf("%.4f", specificity_36),
+    sprintf("%.4f", f_score_36),
+    sprintf("%.4f", auc_roc_36),
+    sprintf("%.4f", brier_score_36)
+  ),
+  Week44_Model = c(
+    sprintf("%.4f", accuracy_44),
+    sprintf("%.4f", precision_44),
+    sprintf("%.4f", recall_44),
+    sprintf("%.4f", specificity_44),
+    sprintf("%.4f", f_score_44),
+    sprintf("%.4f", auc_roc_44),
+    sprintf("%.4f", brier_score_44)
+  )
+)
+
+perf_tab %>%
+  kbl(col.names = c("Measure", "36 Week Model", "44 Week Model"), caption = "Performance Measures for the Two Models", booktabs = T) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+As illustrated in Table 3, both models showcase similar accuracies, indicating comparable overall predictive performance. However, the 36 Week Model consistently outperforms the 44 Week Model across various metrics, including accuracy, recall, specificity, AUC, and Brier Score. This signifies the 36 Week Model's heightened ability to predict tracheostomy and distinguish between classes.
+
+Notably, the Brier Score, a measure of the mean squared difference between predicted probabilities and actual outcomes, provides insights into calibration. In this aspect, the 36 Week Model excels, exhibiting a lower Brier Score compared to the 44 Week Model. This suggests that the 36 Week Model achieves better alignment between predicted probabilities and observed outcomes, enhancing its overall reliability and predictive accuracy. Furthermore, the AUC values affirm that both models possess robust discriminatory power, with a slightly higher AUC for the 36 Week Model. 
+
+# Limitations
+
+## Data
+
+The dataset used is sourced from the BPD Collaborative Registry, which represents a specific set of interdisciplinary BPD programs across the United States and Sweden. The results and conclusions drawn from this dataset may not be entirely generalizable to other populations or healthcare settings. In addition, limited representation from specific centers might result in biased predictions, emphasizing the need for cautious interpretation. The dataset also contains a significant amount of missing data, particularly in variables recorded at 44 weeks. The missingness might be due to variations in data collection practices among different centers and could potentially introduce bias into the analysis. 
+
+## Methods
+
+Multiple imputation was used to address missing data, but imputation introduces assumptions about the nature of missingness. It assumes that the missing data are missing at random (MAR), and if this assumption is violated, the imputed values may introduce bias into the models. The decision to exclude the 'center' variable for model development, while enhancing generalizability, might overlook essential center-specific nuances influencing tracheostomy decisions. Additionally, the assumption of linearity in the logistic regression models could limit the capture of complex, non-linear relationships within the data, not to mention no interactions were included in the models developed.
+
+# Future Directions
+
+Prospective validation studies are essential to affirm the model's utility in real-time clinical decision-making. In addition, comparison of models built using different approaches, as well as including center-specific predictors in the analysis would be interesting avenues to explore. 
+
+# Conclusions
+
+This analysis aimed at predicting tracheostomy placement in infants with severe bronchopulmonary dysplasia (sBPD) yields valuable insights for neonatal care. The comprehensive analysis of demographic, birth, and respiratory variables, drawn from diverse centers in the BPD Collaborative Registry, provides a nuanced understanding of the factors influencing tracheostomy decisions.
+
+Our exploratory analysis revealed complex relationships, emphasizing the importance of preprocessing steps in handling data inconsistencies and missing values. Multiple imputation techniques enhanced dataset completeness, contributing to the robustness of subsequent analyses.
+
+The choice of lasso models for predictive modeling at 36 and 44 weeks postmenstrual age was guided by their ability to handle multicollinearity and promote effective variable selection. The exclusion of the center variable in these models aimed to enhance generalizability, considering variations in data availability across centers.
+
+Model evaluation underscored the consistent superiority of the 36 Week Model. Across various metrics, including accuracy, recall, specificity, AUC, and Brier Score, this model exhibited heightened predictive accuracy. 
+
+The lower Brier Score for the 36 Week Model indicates superior calibration, aligning predicted probabilities with observed outcomes. This suggests the model's enhanced reliability and accuracy in predicting tracheostomy placement, crucial for informing clinical decisions in neonatal care.
+
+In conclusion, this study contributes a robust predictive model tailored for neonatal tracheostomy decisions. The findings not only advance our understanding of sBPD management but also offer a practical tool for clinicians, potentially improving patient outcomes and counseling practices in this challenging medical landscape. Further research and validation efforts are encouraged to solidify the model's applicability across diverse clinical settings.
+
+# Code Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
