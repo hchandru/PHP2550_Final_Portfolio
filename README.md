@@ -1,6 +1,6 @@
 # PHP2550_Final_Portfolio
 
-This Repository contains the code, R Markdown files and PDF files of my final, revised reports of the three projects completed for PHP 2550 taught by Dr. Alice Paul in Fall 2023. 
+This Repository contains the code, R Markdown files and PDF files of my final, revised reports for the three projects completed for PHP 2550 taught by Dr. Alice Paul in Fall 2023. 
 
 ## Project 1
 
